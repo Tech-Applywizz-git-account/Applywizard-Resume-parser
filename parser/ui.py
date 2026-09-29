@@ -414,11 +414,12 @@ HTML_CONTENT = """
         if (data.experience && data.experience.length > 0) {
             html += `<div class="section-title">💼 Experience</div><div class="grid">`;
             data.experience.forEach(exp => {
+                let desc = Array.isArray(exp.description) ? exp.description.slice(0,2).join(' ') : (exp.description || '');
                 html += `<div class="card">
                             <div class="card-title">${exp.job_title || 'Unknown Title'}</div>
                             <div class="card-subtitle">${exp.company || 'Unknown Company'} • ${exp.start_date || '?'} - ${exp.end_date || '?'}</div>
                             ${exp.location ? `<div class="card-detail" style="margin-bottom:8px">📍 ${exp.location}</div>` : ''}
-                            <div class="card-detail">${(exp.description || []).slice(0,2).join(' ')}...</div>
+                            <div class="card-detail">${desc}${desc.length ? '...' : ''}</div>
                          </div>`;
             });
             html += `</div>`;
@@ -448,10 +449,14 @@ HTML_CONTENT = """
         if (data.projects && data.projects.length > 0) {
             html += `<div class="section-title">🚀 Projects</div><div class="grid">`;
             data.projects.forEach(proj => {
+                let pdesc = proj.description || '';
+                if (typeof pdesc === 'string' && pdesc.length > 150) pdesc = pdesc.substring(0, 150) + '...';
+                else if (Array.isArray(pdesc)) pdesc = pdesc.slice(0,2).join(' ') + '...';
+                
                 html += `<div class="card">
                             <div class="card-title">${proj.name || 'Project'}</div>
                             ${proj.technologies && proj.technologies.length ? `<div class="badge-container" style="margin-bottom:10px">${proj.technologies.map(t=>`<span class="badge">${t}</span>`).join('')}</div>` : ''}
-                            <div class="card-detail">${(proj.description || []).slice(0,2).join(' ')}...</div>
+                            <div class="card-detail">${pdesc}</div>
                          </div>`;
             });
             html += `</div>`;
