@@ -18,34 +18,30 @@ except ImportError:
 from resume_parser import parse_resume
 
 # --- FastAPI Setup for Vercel ---
-try:
-    from fastapi import FastAPI, UploadFile, File, HTTPException
-    import tempfile
-    import os
+from fastapi import FastAPI, UploadFile, File, HTTPException
+import tempfile
+import os
+
+app = FastAPI(title="Resume Parser API")
+
+@app.post("/api/parse")
+async def parse_resume_api(file: UploadFile = File(...)):
+    if not file.filename.lower().endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
     
-    app = FastAPI(title="Resume Parser API")
-    
-    @app.post("/api/parse")
-    async def parse_resume_api(file: UploadFile = File(...)):
-        if not file.filename.lower().endswith('.pdf'):
-            raise HTTPException(status_code=400, detail="Only PDF files are supported")
-        
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                tmp.write(await file.read())
-                tmp_path = tmp.name
-                
-            parsed_schema = parse_resume(tmp_path)
-            return parsed_schema.model_dump()
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-except ImportError:
-    # FastAPI not installed, Vercel deployment will fail but local Tkinter will still work
-    app = None
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(await file.read())
+            tmp_path = tmp.name
+            
+        parsed_schema = parse_resume(tmp_path)
+        return parsed_schema.model_dump()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 # --- Tkinter Desktop App ---
 class ResumeParserApp:
