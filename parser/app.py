@@ -19,7 +19,7 @@ from resume_parser import parse_resume
 
 # --- FastAPI Setup for Vercel ---
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 import tempfile
 import os
 from ui import HTML_CONTENT
@@ -29,6 +29,10 @@ app = FastAPI(title="Resume Parser API")
 @app.get("/")
 async def index():
     return HTMLResponse(content=HTML_CONTENT)
+
+@app.get("/api/parse")
+async def redirect_to_index():
+    return RedirectResponse(url="/")
 
 @app.post("/api/parse")
 async def parse_resume_api(file: UploadFile = File(...)):

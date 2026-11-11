@@ -257,6 +257,302 @@ def _infer_section(block_text: str) -> str:
         return "experience"
     return "unknown"
 
+
+# Degree detectors. School-level wording is classified separately so a generic
+# "Secondary School" label does not override Class 12 / junior college.
+_EDU_BACHELOR_RE = re.compile(r"\b(B\.?Tech|B\.?Sc|B\.?Com|BCA|BBA)\b|\b(B\.E\.|B\.A\.)\b|\b(Bachelor of [A-Za-z]+(?: \b(?!(?:in|at|from)\b|\w*(?:University|College|Institute|School|Academy|Polytechnic))\w+)?)\b|\b(Bachelor(?:'s)?)\b(?=\s*(?:in|-|\n|$))", re.I)
+_EDU_MASTER_RE = re.compile(r"\b(M\.?Tech|M\.?Sc|M\.?Com|MCA|MBA|Master Degree)\b|\b(M\.E\.|M\.A\.|M\.S\.)\b|\b(Master of [A-Za-z]+(?: \b(?!(?:in|at|from)\b|\w*(?:University|College|Institute|School|Academy|Polytechnic))\w+)?)\b|\b(Master(?:'s)?)\b(?=\s*(?:in|-|\n|$))", re.I)
+_EDU_PHD_RE = re.compile(r"\b(PhD|Ph\.?D\.|Doctor of Philosophy|Doctorate)\b", re.I)
+_EDU_DIPLOMA_RE = re.compile(r"\b(Diploma(?: in [A-Za-z ]+)?|Polytechnic|ITI)\b", re.I)
+_INTER_SIGNAL_RE = re.compile(
+    r"(?i)("
+    r"\bintermediate\b|"
+    r"\binter\b|"
+    r"\b12th(?:\s+standard)?\b|"
+    r"\bclass\s*xii\b|"
+    r"\bclass\s*12\b|"
+    r"\bxii\b|"
+    r"\bhsc\b|"
+    r"\bhigher\s+secondary(?:\s+certificate)?\b|"
+    r"\bsenior\s+secondary\b|"
+    r"\bpuc\b|"
+    r"\bpre-university\b|"
+    r"\bplus\s+two\b|"
+    r"\+2\b|"
+    r"\bjunior\s+college\b|"
+    r"\bjr\.?\s*college\b"
+    r")"
+)
+_TENTH_STRONG_RE = re.compile(
+    r"(?i)("
+    r"\b10th(?:\s+standard)?\b|"
+    r"\bclass\s*10\b|"
+    r"\bclass\s*x\b|"
+    r"\bssc\b|"
+    r"\bsecondary\s+school\s+certificate\b|"
+    r"\bsecondary\s+education\b|"
+    r"\bschool\s+education\b|"
+    r"\bhigh\s+school\b|"
+    r"\bmatriculation\b|"
+    r"\bmatric\b"
+    r")"
+)
+_GENERIC_SECONDARY_RE = re.compile(r"(?i)\bsecondary\s+school\b")
+_TENTH_DETECT_RE = re.compile(
+    r"(?i)("
+    r"\b10th(?:\s+standard)?\b|"
+    r"\bclass\s*10\b|"
+    r"\bclass\s*x\b|"
+    r"\bssc\b|"
+    r"\bsecondary\s+school(?:\s+certificate)?\b|"
+    r"\bsecondary\s+education\b|"
+    r"\bschool\s+education\b|"
+    r"\bhigh\s+school\b|"
+    r"\bmatriculation\b|"
+    r"\bmatric\b"
+    r")"
+)
+_YEAR_SPAN_RE = re.compile(
+    r"\b((?:19|20)\d{2})\s*(?:-|–|—|to)\s*((?:19|20)\d{2})\b",
+    re.I,
+)
+_INST_RE = re.compile(
+    r'(?<![\w])((?:[\w][\w&\'’‘.,\- ]*?)?(?:University|Universities|College|Colleges|Institute|Institutions?|School(?!\s+Education)|Academy|Polytechnic|Kalasala|\bIIT\b|\bNIT\b|\bIIIT\b|\bJNTU\b)(?:[\w&\'’‘.,\- ]*))',
+    re.I,
+)
+_GENERIC_INST_RE = re.compile(
+    r"(?i)^(secondary school(?: certificate)?|high school|school|college|school education|intermediate|ssc|hsc|matriculation|matric)$"
+)
+_STREAM_RE = re.compile(r"\b(MPC|BiPC|BIPC|CEC|MEC|HEC)\b", re.I)
+_TENTH_MARKER_RE = re.compile(
+    r"(?i)\b(secondary school|ssc|10th|class\s*10|class\s*x|matriculation|matric)\b"
+)
+
+
+def _has_intermediate_signal(text: str) -> bool:
+    """Class 12 / junior college, including a 2-year 'Secondary School' span."""
+    if not text:
+        return False
+    if _INTER_SIGNAL_RE.search(text):
+        return True
+    # "Secondary School, 2020-2022" is the usual Intermediate/Junior College span.
+    # A real 10th marker (SSC, High School, Class 10) still wins.
+    if _GENERIC_SECONDARY_RE.search(text) and not _TENTH_STRONG_RE.search(text):
+        span = _YEAR_SPAN_RE.search(text)
+        if span and int(span.group(2)) - int(span.group(1)) == 2:
+            return True
+    return False
+
+
+def _has_tenth_signal(text: str) -> bool:
+    if not text or _has_intermediate_signal(text):
+        return False
+    return bool(_TENTH_STRONG_RE.search(text) or _GENERIC_SECONDARY_RE.search(text))
+
+
+def _classify_education_text(text: str) -> Optional[str]:
+    """Map one education fragment to a stable level, or None if it has none."""
+    if not text or not text.strip():
+        return None
+    if _EDU_PHD_RE.search(text):
+        return "PhD"
+    if _EDU_MASTER_RE.search(text):
+        return "Master"
+    if _EDU_BACHELOR_RE.search(text):
+        return "Bachelor"
+    if _EDU_DIPLOMA_RE.search(text):
+        return "Diploma"
+    if _has_intermediate_signal(text):
+        return "Intermediate"
+    if _has_tenth_signal(text):
+        return "10th"
+    return None
+
+
+def _intermediate_degree_label(text: str) -> str:
+    """Intermediate rows must not be labeled Secondary School / SSC / 10th."""
+    stream = re.search(r"\b(MPC|BiPC|BIPC|CEC|MEC|HEC)\b", text or "", re.I)
+    stream_s = stream.group(1).upper() if stream else ""
+    if re.search(r"(?i)\bintermediate\b", text or ""):
+        base = "Intermediate"
+    elif re.search(r"(?i)\b(?:12th(?:\s+standard)?|class\s*12|class\s*xii|\bxii\b|plus\s+two|\+2)\b", text or ""):
+        base = "Class 12"
+    elif re.search(r"(?i)\bhsc\b|\bhigher\s+secondary\b|\bsenior\s+secondary\b", text or ""):
+        base = "Class 12"
+    elif re.search(r"(?i)\b(?:puc|pre-university)\b", text or ""):
+        base = "PUC"
+    elif stream_s:
+        base = stream_s
+    else:
+        base = "Intermediate"
+    if stream_s and stream_s.lower() not in base.lower():
+        return f"{base} ({stream_s})"
+    return base
+
+
+def _tenth_degree_label(text: str) -> str:
+    text = text or ""
+    if re.search(r"(?i)\b(?:ssc|secondary\s+school\s+certificate)\b", text):
+        return "SSC"
+    if re.search(r"(?i)\b(?:10th(?:\s+standard)?|class\s*10|class\s*x)\b", text):
+        return "Class 10"
+    if re.search(r"(?i)\bmatric(?:ulation)?\b", text):
+        return "Matric"
+    return "High School"
+
+
+def _should_keep_with_generic_secondary(current_lines: List[str], current_level: str, new_level: str) -> bool:
+    """Keep 'Secondary School' with the junior-college line that follows it."""
+    if current_level != "10th" or new_level != "Intermediate":
+        return False
+    blob = "\n".join(current_lines)
+    if _TENTH_STRONG_RE.search(blob) or _INTER_SIGNAL_RE.search(blob):
+        return False
+    return bool(_GENERIC_SECONDARY_RE.search(blob))
+
+
+def _split_education_chunk(chunk: str) -> List[str]:
+    """One row per distinct level. Do not collapse lower levels into a degree."""
+    lines = [ln.strip() for ln in (chunk or "").splitlines() if ln.strip()]
+    if not lines:
+        return []
+    groups: List[List[str]] = []
+    current: List[str] = []
+    current_level: Optional[str] = None
+    for ln in lines:
+        lvl = _classify_education_text(ln)
+        if lvl and current_level and lvl != current_level and not _should_keep_with_generic_secondary(current, current_level, lvl):
+            groups.append(current)
+            current = [ln]
+            current_level = lvl
+            continue
+        current.append(ln)
+        if lvl:
+            current_level = lvl
+    if current:
+        groups.append(current)
+    return ["\n".join(group) for group in groups]
+
+
+def _clean_institution_name(name: str) -> str:
+    if not name:
+        return ""
+    name = re.sub(r"\s+", " ", name.replace("\n", " ")).strip()
+    name = re.sub(
+        r"(?i)\s*[\(\[]\s*(?:percentage|percent|cgpa|gpa|marks)\b[^)\]]*[\)\]]",
+        "",
+        name,
+    )
+    name = re.sub(r"(?i)\s+\b(?:percentage|percent|cgpa|gpa)\b.*$", "", name)
+    name = re.sub(r"(?i)\s+\d{1,3}(?:\.\d+)?\s*%$", "", name)
+    name = re.sub(r"\s{2,}", " ", name).strip(" ,;|-")
+    if re.search(r"(?i)\b(?:college|institute|polytechnic)\b", name) and re.search(
+        r"(?i)\b(?:secondary\s+school|high\s+school|school\s+education)\b", name
+    ):
+        trimmed = re.search(
+            r"(?i)\b([A-Za-z0-9][\w.'’\-]*(?:\s+[\w.'’\-]+){0,8}\s+(?:junior\s+college|jr\.?\s*college|college|institute|polytechnic))\b",
+            name,
+        )
+        if trimmed:
+            name = trimmed.group(1).strip()
+    return name
+
+
+def _institution_candidates(text: str) -> List[str]:
+    found: List[str] = []
+    seen = set()
+    for raw in _INST_RE.findall(text or ""):
+        name = _clean_institution_name(raw)
+        if not name or _GENERIC_INST_RE.match(name):
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        found.append(name)
+    return found
+
+
+def _is_college_name(name: str) -> bool:
+    return bool(re.search(r"(?i)\b(college|institute|polytechnic|academy|university|jntu)\b", name or ""))
+
+
+def _is_school_name(name: str) -> bool:
+    return bool(re.search(r"(?i)\bschool\b", name or "")) and not _is_college_name(name)
+
+
+def _select_institution(text: str, level: Optional[str], current: Optional[str]) -> Optional[str]:
+    candidates = _institution_candidates(text)
+    if level == "Intermediate":
+        for cand in candidates:
+            if _is_college_name(cand):
+                return cand
+    if level == "10th":
+        for cand in candidates:
+            if _is_school_name(cand):
+                return cand
+    cleaned = _clean_institution_name(current or "")
+    if cleaned and not _GENERIC_INST_RE.match(cleaned):
+        if level == "Intermediate" and _is_school_name(cleaned):
+            for cand in candidates:
+                if _is_college_name(cand):
+                    return cand
+        return cleaned
+    if candidates:
+        return candidates[0]
+    return cleaned or None
+
+
+def _apply_institution_roles(entry: EducationEntry) -> None:
+    name = _clean_institution_name(entry.institution or "")
+    if not name:
+        return
+    entry.institution = name
+    low = name.lower()
+    is_college = bool(re.search(r"\b(college|institute|polytechnic|academy)\b", low))
+    is_university = bool(re.search(r"\b(university|jntu|iit|nit|iiit)\b", low))
+    is_school = bool(re.search(r"\bschool\b", low)) and not is_college
+    if is_university and not entry.university:
+        entry.university = name
+    if is_college or (entry.level == "Intermediate" and not is_school):
+        entry.college = name
+        entry.school = None
+    elif is_school or entry.level == "10th":
+        entry.school = name
+        if not is_college:
+            entry.college = None
+
+
+def _finalize_education_entry(entry: EducationEntry, chunk: str) -> None:
+    """Normalize level, degree, and school/college after a chunk is parsed."""
+    level = _classify_education_text(chunk)
+    if not level:
+        return
+    entry.level = level
+
+    if entry.level == "Intermediate":
+        entry.degree = _intermediate_degree_label(chunk)
+        if entry.field_of_study and _TENTH_MARKER_RE.search(entry.field_of_study):
+            entry.field_of_study = None
+        group_m = _STREAM_RE.search(chunk)
+        if group_m:
+            entry.group = group_m.group(1).strip()
+            entry.branch = entry.group
+        elif entry.field_of_study is None and entry.branch and _TENTH_MARKER_RE.search(entry.branch):
+            entry.branch = None
+    elif entry.level == "10th":
+        entry.degree = _tenth_degree_label(chunk)
+
+    if entry.level in {"Intermediate", "10th"} or not (entry.institution and entry.institution.strip()):
+        picked = _select_institution(chunk, entry.level, entry.institution)
+        if picked:
+            entry.institution = picked
+    _apply_institution_roles(entry)
+
+    if entry.level == "Intermediate" and entry.college:
+        entry.school = None
+
+
 def _extract_deterministic(blocks: List[List[Dict]], raw_text: str) -> ResumeSchema:
     schema = ResumeSchema(raw_text=raw_text)
     
@@ -339,12 +635,12 @@ def _extract_deterministic(blocks: List[List[Dict]], raw_text: str) -> ResumeSch
         sections[current_section].append(block)
 
     # Parse Education
-    BACHELOR_RE = re.compile(r"\b(B\.?Tech|B\.?Sc|B\.?Com|BCA|BBA)\b|\b(B\.E\.|B\.A\.)\b|\b(Bachelor of [A-Za-z]+(?: \b(?!(?:in|at|from)\b|\w*(?:University|College|Institute|School|Academy|Polytechnic))\w+)?)\b|\b(Bachelor(?:'s)?)\b(?=\s*(?:in|-|\n|$))", re.I)
-    MASTER_RE = re.compile(r"\b(M\.?Tech|M\.?Sc|M\.?Com|MCA|MBA|Master Degree)\b|\b(M\.E\.|M\.A\.|M\.S\.)\b|\b(Master of [A-Za-z]+(?: \b(?!(?:in|at|from)\b|\w*(?:University|College|Institute|School|Academy|Polytechnic))\w+)?)\b|\b(Master(?:'s)?)\b(?=\s*(?:in|-|\n|$))", re.I)
-    PHD_RE = re.compile(r"\b(PhD|Ph\.?D\.|Doctor of Philosophy|Doctorate)\b", re.I)
-    DIPLOMA_RE = re.compile(r"\b(Diploma(?: in [A-Za-z ]+)?|Polytechnic)\b", re.I)
-    INTER_RE = re.compile(r"\b(Intermediate|Inter|12th(?: Standard)?|Class XII|Class 12|HSC|Higher Secondary(?: Certificate)?|PUC|Pre-University|Plus Two)\b", re.I)
-    TENTH_RE = re.compile(r"\b(10th(?: Standard)?|Class X|Class 10|SSC|Secondary School(?: Certificate)?|Secondary Education|School Education|High School|Matriculation|Matric)\b", re.I)
+    BACHELOR_RE = _EDU_BACHELOR_RE
+    MASTER_RE = _EDU_MASTER_RE
+    PHD_RE = _EDU_PHD_RE
+    DIPLOMA_RE = _EDU_DIPLOMA_RE
+    INTER_RE = _INTER_SIGNAL_RE
+    TENTH_RE = _TENTH_DETECT_RE
     # Institution regex: case-insensitive so it matches title-case AND ALL-CAPS names
     INST_RE = re.compile(
         r'(?<![\w])((?:[\w][\w&\'’‘.,\- ]*?)?(?:University|Universities|College|Colleges|Institute|Institutions?|School(?!\s+Education)|Academy|Polytechnic|Kalasala|\bIIT\b|\bNIT\b|\bIIIT\b|\bJNTU\b)(?:[\w&\'’‘.,\- ]*))',
@@ -376,20 +672,17 @@ def _extract_deterministic(blocks: List[List[Dict]], raw_text: str) -> ResumeSch
             chunk_has_inst = bool(INST_RE.search(chunk_text))
 
             if has_degree_kw and chunk_has_degree:
-                def get_level(t):
-                    if BACHELOR_RE.search(t): return 1
-                    if MASTER_RE.search(t): return 2
-                    if PHD_RE.search(t): return 3
-                    if INTER_RE.search(t): return 4
-                    if TENTH_RE.search(t): return 5
-                    if DIPLOMA_RE.search(t): return 6
-                    return 0
-
-                if get_level(text) != 0 and get_level(chunk_text) != 0 and get_level(text) != get_level(chunk_text):
-                    is_new_entity = True
+                new_lvl = _classify_education_text(text)
+                chunk_lvl = _classify_education_text(chunk_text)
+                if new_lvl and chunk_lvl and new_lvl != chunk_lvl:
+                    if not _should_keep_with_generic_secondary(current_chunk, chunk_lvl, new_lvl):
+                        is_new_entity = True
                 elif len(current_chunk) > 1 or bool(re.search(r'\d', chunk_text)):
                     # Don't split if the new text is just a degree label without dates/institutions AND is the same level
                     if not has_inst_kw and not has_date_kw and len(text.split()) <= 3:
+                        pass
+                    elif has_inst_kw and not chunk_has_inst and new_lvl == chunk_lvl:
+                        # Score or label first, then the school/college that belongs to it.
                         pass
                     else:
                         is_new_entity = True
@@ -416,6 +709,11 @@ def _extract_deterministic(blocks: List[List[Dict]], raw_text: str) -> ResumeSch
             
     if current_chunk:
         edu_chunks.append("\n".join(current_chunk))
+
+    split_chunks = []
+    for raw_chunk in edu_chunks:
+        split_chunks.extend(_split_education_chunk(raw_chunk))
+    edu_chunks = split_chunks
         
     def safe_replace(text, target):
         if not target: return text
@@ -448,26 +746,29 @@ def _extract_deterministic(blocks: List[List[Dict]], raw_text: str) -> ResumeSch
                     structural_match = True
                     
                     deg_str = parts[0]
-                    b_m = BACHELOR_RE.search(deg_str)
-                    m_m = MASTER_RE.search(deg_str)
-                    if b_m:
+                    line_level = _classify_education_text(line)
+                    b_m = BACHELOR_RE.search(line)
+                    m_m = MASTER_RE.search(line)
+                    if line_level == "Bachelor" and b_m:
                         entry.level = "Bachelor"
                         entry.degree = b_m.group(1) or b_m.group(2) or b_m.group(3) or b_m.group(4)
-                    elif m_m:
+                    elif line_level == "Master" and m_m:
                         entry.level = "Master"
                         entry.degree = m_m.group(1) or m_m.group(2) or m_m.group(3) or m_m.group(4)
-                    elif PHD_RE.search(deg_str):
-                        entry.level = "Doctorate"
-                        entry.degree = PHD_RE.search(deg_str).group(1).strip()
-                    elif INTER_RE.search(deg_str):
+                    elif line_level == "PhD":
+                        phd_m = PHD_RE.search(line)
+                        entry.level = "PhD"
+                        entry.degree = phd_m.group(1).strip() if phd_m else "PhD"
+                    elif line_level == "Intermediate":
                         entry.level = "Intermediate"
-                        entry.degree = INTER_RE.search(deg_str).group(1).strip()
-                    elif TENTH_RE.search(deg_str):
+                        entry.degree = _intermediate_degree_label(line)
+                    elif line_level == "10th":
                         entry.level = "10th"
-                        entry.degree = TENTH_RE.search(deg_str).group(1).strip()
-                    elif DIPLOMA_RE.search(deg_str):
+                        entry.degree = _tenth_degree_label(line)
+                    elif line_level == "Diploma":
+                        dip_m = DIPLOMA_RE.search(line)
                         entry.level = "Diploma"
-                        entry.degree = DIPLOMA_RE.search(deg_str).group(1).strip()
+                        entry.degree = dip_m.group(1).strip() if dip_m else "Diploma"
                         
                     if entry.degree:
                         fos_m = re.search(re.escape(entry.degree) + r"(?:[ \t]+(?:in|-))?[ \t]+([A-Za-z &]{2,30})(?=[ \t]*(?:\n|$))", deg_str, re.I)
@@ -501,36 +802,41 @@ def _extract_deterministic(blocks: List[List[Dict]], raw_text: str) -> ResumeSch
 
         # Generic Extraction (if not structural)
         if not structural_match:
+            classified = _classify_education_text(chunk)
             b_match = BACHELOR_RE.search(chunk)
             m_match = MASTER_RE.search(chunk)
-            if b_match:
+            if classified == "Bachelor" and b_match:
                 entry.level = "Bachelor"
                 entry.degree = b_match.group(1) or b_match.group(2) or b_match.group(3) or b_match.group(4)
                 inst_candidate = safe_replace(inst_candidate, b_match.group(0))
-            elif m_match:
+            elif classified == "Master" and m_match:
                 entry.level = "Master"
                 entry.degree = m_match.group(1) or m_match.group(2) or m_match.group(3) or m_match.group(4)
                 inst_candidate = safe_replace(inst_candidate, m_match.group(0))
-            elif PHD_RE.search(chunk):
-                entry.level = "Doctorate"
+            elif classified == "PhD":
+                entry.level = "PhD"
                 m = PHD_RE.search(chunk)
-                entry.degree = m.group(1).strip()
-                inst_candidate = safe_replace(inst_candidate, m.group(0))
-            elif INTER_RE.search(chunk):
+                entry.degree = m.group(1).strip() if m else "PhD"
+                if m:
+                    inst_candidate = safe_replace(inst_candidate, m.group(0))
+            elif classified == "Intermediate":
                 entry.level = "Intermediate"
+                entry.degree = _intermediate_degree_label(chunk)
                 m = INTER_RE.search(chunk)
-                entry.degree = m.group(1).strip()
-                inst_candidate = safe_replace(inst_candidate, m.group(0))
-            elif TENTH_RE.search(chunk):
+                if m:
+                    inst_candidate = safe_replace(inst_candidate, m.group(0))
+            elif classified == "10th":
                 entry.level = "10th"
+                entry.degree = _tenth_degree_label(chunk)
                 m = TENTH_RE.search(chunk)
-                entry.degree = m.group(1).strip()
-                inst_candidate = safe_replace(inst_candidate, m.group(0))
-            elif DIPLOMA_RE.search(chunk):
+                if m:
+                    inst_candidate = safe_replace(inst_candidate, m.group(0))
+            elif classified == "Diploma":
                 entry.level = "Diploma"
                 m = DIPLOMA_RE.search(chunk)
-                entry.degree = m.group(1).strip()
-                inst_candidate = safe_replace(inst_candidate, m.group(0))
+                entry.degree = m.group(1).strip() if m else "Diploma"
+                if m:
+                    inst_candidate = safe_replace(inst_candidate, m.group(0))
                 
             if entry.degree:
                 fos_m = re.search(re.escape(entry.degree) + r"(?:[ \t]+(?:in|-))?[ \t]+([A-Za-z &]{2,30})(?=[ \t]*(?:\n|$))", chunk, re.I)
@@ -667,7 +973,8 @@ def _extract_deterministic(blocks: List[List[Dict]], raw_text: str) -> ResumeSch
                     entry.institution = re.sub(r'(?i)Affiliated to\s*', '', entry.institution).strip()
 
         # Determine if Formal Education or Training
-        is_formal_edu = bool(BACHELOR_RE.search(chunk) or MASTER_RE.search(chunk) or PHD_RE.search(chunk) or INTER_RE.search(chunk) or TENTH_RE.search(chunk) or DIPLOMA_RE.search(chunk))
+        _finalize_education_entry(entry, chunk)
+        is_formal_edu = _classify_education_text(chunk) is not None
         
         if is_formal_edu:
             if entry.degree or entry.institution or entry.score:
